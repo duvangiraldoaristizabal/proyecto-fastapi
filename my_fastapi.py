@@ -1,351 +1,188 @@
-# main.py - La aplicación más simple del mundo 
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from enum import Enum
+from typing import Dict, List
 
-from fastapi import FastAPI 
+# ─────────────────────────────
+# INICIALIZAR LA APP
+# ─────────────────────────────
 
-from fastapi.responses import HTMLResponse 
+app = FastAPI(title="Cajero Automático Virtual", version="1.0")
 
- 
 
-# Crear la aplicación 
+# ─────────────────────────────
+# MODELOS
+# ─────────────────────────────
 
-app = FastAPI(title="Mi Primera App en Azure") 
+class EstadoCuenta(str, Enum):
+    ACTIVA = "ACTIVA"
+    BLOQUEADA = "BLOQUEADA"
+    CERRADA = "CERRADA"
 
- 
 
-# La página principal (HTML integrado) 
+class TipoMovimiento(str, Enum):
+    CONSIGNACION = "CONSIGNACION"
+    RETIRO = "RETIRO"
+    TRANSFERENCIA_SALIDA = "TRANSFERENCIA_SALIDA"
+    TRANSFERENCIA_ENTRADA = "TRANSFERENCIA_ENTRADA"
 
-PAGINA_PRINCIPAL = """ 
 
-<!DOCTYPE html> 
+class Movimiento(BaseModel):
+    tipo: TipoMovimiento
+    monto: float
+    descripcion: str
 
-<html> 
 
-<head> 
+class Cuenta(BaseModel):
+    numero: str
+    titular: str
+    saldo: float
+    estado: EstadoCuenta = EstadoCuenta.ACTIVA
 
-    <title>🧮 Mi Calculadora en Azure</title> 
 
-    <style> 
+# ─────────────────────────────
+# BASES DE DATOS EN MEMORIA
+# ─────────────────────────────
 
-        body {  
+cuentas_db: Dict[str, Cuenta] = {}
+movimientos_db: Dict[str, List[Movimiento]] = {}
 
-            font-family: Arial, sans-serif;  
 
-            max-width: 600px;  
+# ─────────────────────────────
+# ENDPOINTS
+# ─────────────────────────────
 
-            margin: 50px auto;  
+@app.get("/")
+def home():
+    return {"mensaje": "💳 Bienvenido al Cajero Automático Virtual"}
 
-            text-align: center; 
 
-            background-color: #f0f8ff; 
+# Crear cuenta
+@app.post("/cuentas")
+def crear_cuenta(cuenta: Cuenta):
+    if cuenta.numero in cuentas_db:
+        raise HTTPException(status_code=400, detail="La cuenta ya existe")
 
-        } 
+    cuentas_db[cuenta.numero] = cuenta
+    movimientos_db[cuenta.numero] = []
 
-        .calculadora {  
+    return {"mensaje": "Cuenta creada exitosamente", "cuenta": cuenta}
 
-            background: white;  
 
-            padding: 30px;  
+# Consultar saldo
+@app.get("/cuentas/{numero}")
+def consultar_cuenta(numero: str):
+    if numero not in cuentas_db:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
 
-            border-radius: 10px;  
+    return cuentas_db[numero]
 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
 
-        } 
+# Depositar
+@app.post("/depositar/{numero}")
+def depositar(numero: str, monto: float):
+    if numero not in cuentas_db:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
 
-        input {  
+    if monto <= 0:
+        raise HTTPException(status_code=400, detail="Monto inválido")
 
-            width: 100px;  
+    cuenta = cuentas_db[numero]
+    cuenta.saldo += monto
 
-            padding: 10px;  
+    movimientos_db[numero].append(
+        Movimiento(
+            tipo=TipoMovimiento.CONSIGNACION,
+            monto=monto,
+            descripcion=f"Depósito de {monto}"
+        )
+    )
 
-            margin: 5px;  
+    return {"mensaje": "Depósito realizado", "saldo_actual": cuenta.saldo}
 
-            border: 2px solid #4CAF50; 
 
-            border-radius: 5px; 
+# Retirar
+@app.post("/retirar/{numero}")
+def retirar(numero: str, monto: float):
+    if numero not in cuentas_db:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
 
-            text-align: center; 
+    cuenta = cuentas_db[numero]
 
-            font-size: 16px; 
+    if monto <= 0:
+        raise HTTPException(status_code=400, detail="Monto inválido")
 
-        } 
+    if monto > cuenta.saldo:
+        raise HTTPException(status_code=400, detail="Fondos insuficientes")
 
-        button {  
+    cuenta.saldo -= monto
 
-            padding: 10px 20px;  
+    movimientos_db[numero].append(
+        Movimiento(
+            tipo=TipoMovimiento.RETIRO,
+            monto=monto,
+            descripcion=f"Retiro de {monto}"
+        )
+    )
 
-            margin: 5px;  
+    return {"mensaje": "Retiro realizado", "saldo_actual": cuenta.saldo}
 
-            background: #4CAF50;  
 
-            color: white;  
+# Transferencia
+@app.post("/transferir")
+def transferir(origen: str, destino: str, monto: float):
+    if origen not in cuentas_db or destino not in cuentas_db:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
 
-            border: none;  
+    if monto <= 0:
+        raise HTTPException(status_code=400, detail="Monto inválido")
 
-            border-radius: 5px; 
+    cuenta_origen = cuentas_db[origen]
+    cuenta_destino = cuentas_db[destino]
 
-            font-size: 16px; 
+    if monto > cuenta_origen.saldo:
+        raise HTTPException(status_code=400, detail="Fondos insuficientes")
 
-            cursor: pointer; 
+    cuenta_origen.saldo -= monto
+    cuenta_destino.saldo += monto
 
-        } 
+    movimientos_db[origen].append(
+        Movimiento(
+            tipo=TipoMovimiento.TRANSFERENCIA_SALIDA,
+            monto=monto,
+            descripcion=f"Transferencia enviada a {destino}"
+        )
+    )
 
-        button:hover { background: #45a049; } 
+    movimientos_db[destino].append(
+        Movimiento(
+            tipo=TipoMovimiento.TRANSFERENCIA_ENTRADA,
+            monto=monto,
+            descripcion=f"Transferencia recibida de {origen}"
+        )
+    )
 
-        .resultado {  
+    return {
+        "mensaje": "Transferencia realizada",
+        "saldo_origen": cuenta_origen.saldo,
+        "saldo_destino": cuenta_destino.saldo
+    }
 
-            font-size: 24px;  
 
-            color: #333;  
+# Movimientos
+@app.get("/movimientos/{numero}")
+def listar_movimientos(numero: str):
+    if numero not in cuentas_db:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
 
-            margin: 20px;  
+    return movimientos_db[numero]
 
-            padding: 20px; 
 
-            background: #e7f3ff; 
+# ─────────────────────────────
+# EJECUCIÓN (REQUIRED BY AZURE)
+# ─────────────────────────────
 
-            border-radius: 5px; 
-
-        } 
-
-    </style> 
-
-</head> 
-
-<body> 
-
-    <div class="calculadora"> 
-
-        <h1>🧮 Mi Calculadora en la Nube</h1> 
-
-        <p>¡Esta aplicación está corriendo en Azure! 🚀</p> 
-
-         
-
-        <div> 
-
-            <input type="number" id="num1" placeholder="Número 1"> 
-
-            <input type="number" id="num2" placeholder="Número 2"> 
-
-        </div> 
-
-         
-
-        <div> 
-
-            <button onclick="calcular('sumar')">➕ Sumar</button> 
-
-            <button onclick="calcular('restar')">➖ Restar</button> 
-
-            <button onclick="calcular('multiplicar')">✖️ Multiplicar</button> 
-
-            <button onclick="calcular('dividir')">➗ Dividir</button> 
-
-        </div> 
-
-         
-
-        <div id="resultado" class="resultado"> 
-
-            El resultado aparecerá aquí 
-
-        </div> 
-
-    </div> 
-
- 
-
-    <script> 
-
-        async function calcular(operacion) { 
-
-            const num1 = document.getElementById('num1').value; 
-
-            const num2 = document.getElementById('num2').value; 
-
-             
-
-            if (!num1 || !num2) { 
-
-                alert('¡Por favor ingresa ambos números!'); 
-
-                return; 
-
-            } 
-
-             
-
-            try { 
-
-                const respuesta = await fetch(/calcular/${operacion}?a=${num1}&b=${num2}); 
-
-                const datos = await respuesta.json(); 
-
-                 
-
-                document.getElementById('resultado').innerHTML =  
-
-                    <strong>${num1} ${obtenerSimbolo(operacion)} ${num2} = ${datos.resultado}</strong>; 
-
-                     
-
-            } catch (error) { 
-
-                document.getElementById('resultado').innerHTML =  
-
-                    '<span style="color: red;">Error en el cálculo</span>'; 
-
-            } 
-
-        } 
-
-         
-
-        function obtenerSimbolo(operacion) { 
-
-            const simbolos = { 
-
-                'sumar': '+', 
-
-                'restar': '-',  
-
-                'multiplicar': '×', 
-
-                'dividir': '÷' 
-
-            }; 
-
-            return simbolos[operacion] || '?'; 
-
-        } 
-
-    </script> 
-
-</body> 
-
-</html> 
-
-""" 
-
- 
-
-@app.get("/") 
-
-def pagina_principal(): 
-
-    """ 
-
-    🏠 PÁGINA PRINCIPAL 
-
-    Esto devuelve el HTML que ve el usuario 
-
-    """ 
-
-    return HTMLResponse(PAGINA_PRINCIPAL) 
-
- 
-
-@app.get("/calcular/{operacion}") 
-
-def calcular(operacion: str, a: float, b: float): 
-
-    """ 
-
-    🧮 CALCULADORA 
-
-    Recibe dos números y una operación, devuelve el resultado 
-
-     
-
-    Parámetros: 
-
-    - operacion: sumar, restar, multiplicar, dividir 
-
-    - a: primer número 
-
-    - b: segundo número 
-
-    """ 
-
-     
-
-    if operacion == "sumar": 
-
-        resultado = a + b 
-
-    elif operacion == "restar": 
-
-        resultado = a - b 
-
-    elif operacion == "multiplicar": 
-
-        resultado = a * b 
-
-    elif operacion == "dividir": 
-
-        if b == 0: 
-
-            return {"error": "No se puede dividir por cero"} 
-
-        resultado = a / b 
-
-    else: 
-
-        return {"error": "Operación no válida"} 
-
-     
-
-    return { 
-
-        "operacion": operacion, 
-
-        "numero1": a, 
-
-        "numero2": b, 
-
-        "resultado": resultado 
-
-    } 
-
- 
-
-@app.get("/info") 
-
-def informacion_app(): 
-
-    """ 
-
-    ℹ️ INFORMACIÓN DE LA APP 
-
-    Endpoint simple que muestra información básica 
-
-    """ 
-
-    return { 
-
-        "mensaje": "¡Hola desde Azure!", 
-
-        "app": "Mi Primera Calculadora", 
-
-        "estado": "Funcionando perfectamente", 
-
-        "ubicacion": "Nube de Azure ☁️" 
-
-    } 
-
- 
-
-# Esto es necesario para Azure 
-
-if __name__ == "_main_": 
-
-    import uvicorn 
-
-    import os 
-
-    # Azure nos dice en qué puerto ejecutar la app 
-
-    puerto = int(os.environ.get("PORT", 8000)) 
-
+if __name__ == "__main__":
+    import uvicorn, os
+    puerto = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=puerto)
