@@ -1,0 +1,7 @@
+.gitHub/workflows/
+__pycache__/
+my_fastapi.py
+database.py
+domain.py
+movimiento.py
+requirements.txt
